@@ -1,0 +1,2 @@
+# Update everything Wednesday at 4pm UTC
+0 16 * * Wed root yum upgrade -q -y &> /dev/null
