@@ -585,7 +585,7 @@ def launch_cluster(conn, opts, cluster_name):
         slave_group.authorize('tcp', 60075, 60075, authorized_address)
 
     # Check if instances are already running in our groups
-    existing_masters, existing_slaves = get_existing_cluster(conn, opts, cluster_name,
+    existing_masters, existing_slaves = get_existing_cluster(conn, opts, cluster_name, vpc_id=opts.vpc_id,
                                                              die_on_error=False)
     if existing_slaves or (existing_masters and not opts.use_existing_master):
         print("ERROR: There are already instances running in group %s or %s" %
@@ -685,7 +685,7 @@ def launch_cluster(conn, opts, cluster_name):
             conn.cancel_spot_instance_requests(my_req_ids)
             # Log a warning if any of these requests actually launched instances:
             (master_nodes, slave_nodes) = get_existing_cluster(
-                conn, opts, cluster_name, die_on_error=False)
+                conn, opts, cluster_name, vpc_id, die_on_error=False)
             running = len(master_nodes) + len(slave_nodes)
             if running:
                 print(("WARNING: %d instances are still running" % running), file=stderr)
@@ -787,7 +787,7 @@ def launch_cluster(conn, opts, cluster_name):
     return (master_nodes, slave_nodes)
 
 
-def get_existing_cluster(conn, opts, cluster_name, die_on_error=True):
+def get_existing_cluster(conn, opts, cluster_name, vpc_id=None, die_on_error=True):
     """
     Get the EC2 instances in an existing cluster if available.
     Returns a tuple of lists of EC2 instance objects for the masters and slaves.
@@ -802,8 +802,11 @@ def get_existing_cluster(conn, opts, cluster_name, die_on_error=True):
         EC2 reservation filters and instance states are documented here:
             http://docs.aws.amazon.com/cli/latest/reference/ec2/describe-instances.html#options
         """
-        reservations = conn.get_all_reservations(
-            filters={"instance.group-name": group_names})
+        filters={}
+        filters['instance.group-name']=group_names
+        if vpc_id is not None:
+            filters["vpc_id"] = vpc_id
+        reservations = conn.get_all_reservations(filters=filters)
         instances = itertools.chain.from_iterable(r.instances for r in reservations)
         return [i for i in instances if i.state not in ["shutting-down", "terminated"]]
 
@@ -1383,12 +1386,14 @@ def real_main():
     if opts.zone == "":
         opts.zone = random.choice(conn.get_all_zones()).name
 
+    vpc_id=opts.vpc_id
+
     if action == "launch":
         if opts.slaves <= 0:
             print("ERROR: You have to start at least 1 slave", file=sys.stderr)
             sys.exit(1)
         if opts.resume:
-            (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name)
+            (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name, vpc_id)
         else:
             (master_nodes, slave_nodes) = launch_cluster(conn, opts, cluster_name)
         wait_for_cluster_state(
@@ -1401,7 +1406,7 @@ def real_main():
 
     elif action == "destroy":
         (master_nodes, slave_nodes) = get_existing_cluster(
-            conn, opts, cluster_name, die_on_error=False)
+            conn, opts, cluster_name, vpc_id, die_on_error=False)
 
         if any(master_nodes + slave_nodes):
             print("The following instances will be terminated:")
@@ -1469,7 +1474,7 @@ def real_main():
                     print("Try re-running in a few minutes.")
 
     elif action == "login":
-        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name)
+        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name, vpc_id)
         if not master_nodes[0].public_dns_name and not opts.private_ips:
             print("Master has no public DNS name.  Maybe you meant to specify --private-ips?")
         else:
@@ -1488,7 +1493,7 @@ def real_main():
             "Reboot cluster slaves " + cluster_name + " (y/N): ")
         if response == "y":
             (master_nodes, slave_nodes) = get_existing_cluster(
-                conn, opts, cluster_name, die_on_error=False)
+                conn, opts, cluster_name, vpc_id, die_on_error=False)
             print("Rebooting slaves...")
             for inst in slave_nodes:
                 if inst.state not in ["shutting-down", "terminated"]:
@@ -1496,7 +1501,7 @@ def real_main():
                     inst.reboot()
 
     elif action == "get-master":
-        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name)
+        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name, vpc_id)
         if not master_nodes[0].public_dns_name and not opts.private_ips:
             print("Master has no public DNS name.  Maybe you meant to specify --private-ips?")
         else:
@@ -1512,7 +1517,7 @@ def real_main():
             "Stop cluster " + cluster_name + " (y/N): ")
         if response == "y":
             (master_nodes, slave_nodes) = get_existing_cluster(
-                conn, opts, cluster_name, die_on_error=False)
+                conn, opts, cluster_name, vpc_id, die_on_error=False)
             print("Stopping master...")
             for inst in master_nodes:
                 if inst.state not in ["shutting-down", "terminated"]:
@@ -1526,7 +1531,7 @@ def real_main():
                         inst.stop()
 
     elif action == "start":
-        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name)
+        (master_nodes, slave_nodes) = get_existing_cluster(conn, opts, cluster_name, vpc_id)
         print("Starting slaves...")
         for inst in slave_nodes:
             if inst.state not in ["shutting-down", "terminated"]:
