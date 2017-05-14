@@ -324,6 +324,9 @@ def parse_args():
         "--copy-aws-credentials", action="store_true", default=False,
         help="Add AWS credentials to hadoop configuration to allow Spark to access S3")
     parser.add_option(
+        "--aws-credentials-file", type="string", default=None,
+        help="Path to a file containing AWS credentials (AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY) to allow Hadoop to use a different AWS profile")
+    parser.add_option(
         "--subnet-id", default=None,
         help="VPC subnet to launch instances in")
     parser.add_option(
@@ -362,6 +365,16 @@ def parse_args():
                     print("ERROR: The environment variable AWS_SECRET_ACCESS_KEY must be set",
                           file=stderr)
                     sys.exit(1)
+
+    if opts.aws_credentials_file is not None:
+        if opts.copy_aws_credentials is not None:
+            print("Cannot use --copy-aws-credentials with --aws-credentials-file", file=stderr)
+            sys.exit(1)
+        if not os.path.exists(opts.aws_credentials_file):
+            print("ERROR: AWS credentials file '{f}' not found".format(f=opts.aws_credentials_file),
+                    file=stderr)
+            sys.exit(1)
+
     return (opts, action, cluster_name)
 
 
@@ -1130,6 +1143,23 @@ def deploy_files(conn, root_dir, opts, master_nodes, slave_nodes, modules):
     else:
         template_vars["aws_access_key_id"] = ""
         template_vars["aws_secret_access_key"] = ""
+
+    if opts.aws_credentials_file is not None:
+        try:
+            cred=open(opts.aws_credentials_file)
+            for line in cred:
+                # quietly ignore misformatted lines
+                try:
+                    token, value = line.partition('=')[::2]
+                    if token == 'AWS_ACCESS_KEY_ID':
+                        template_vars["aws_access_key_id"] = value.strip()
+                    elif token == 'AWS_SECRET_ACCESS_KEY':
+                        template_vars["aws_secret_access_key"] = value.strip()
+                except:
+                    pass
+        except Exception as e:
+            print((e), file=stderr)
+            sys.exit(1)
 
     # Create a temp directory in which we will place all the files to be
     # deployed after we substitue template parameters in them
